@@ -26,7 +26,7 @@ from tlslite.extensions import SNIExtension
 from tlsfuzzer.utils.lists import natural_sort_keys
 from tlsfuzzer.utils.ordered_dict import OrderedDict
 
-version = 6
+version = 7
 
 
 def help_msg():
@@ -292,6 +292,33 @@ def main():
     node.add_child(ExpectClose())
 
     conversations["invalid padding_length in Finished"] = conversation
+
+    # create a CKE with PMS the runner doesn't know/use
+    conversation = Connect(host, port)
+    node = conversation
+    ciphers = [cipher]
+    node = node.add_child(ClientHelloGenerator(ciphers,
+                                               extensions=cln_extensions))
+    node = node.add_child(ExpectServerHello(extensions=srv_extensions))
+
+    node = node.add_child(ExpectCertificate())
+    node = node.add_child(ExpectServerHelloDone())
+    node = node.add_child(TCPBufferingEnable())
+    # use too short PMS but then change padding so that the PMS is
+    # correct length with correct TLS version but the encryption keys
+    # that tlsfuzzer calculates will be incorrect
+    node = node.add_child(ClientKeyExchangeGenerator(
+        padding_subs={-3: 0, -2: 3, -1: 3},
+        premaster_secret=bytearray([1] * 46)))
+    node = node.add_child(ChangeCipherSpecGenerator())
+    node = node.add_child(FinishedGenerator())
+    node = node.add_child(TCPBufferingDisable())
+    node = node.add_child(TCPBufferingFlush())
+    node = node.add_child(ExpectAlert(level,
+                                      alert))
+    node.add_child(ExpectClose())
+
+    conversations["fuzzed pre master secret"] = conversation
 
     # set 2nd byte of padding to 3 (invalid value)
     conversation = Connect(host, port)
@@ -873,6 +900,9 @@ def main():
     print("  - 'invalid MAC in Finished on pos 0'")
     print("  - 'invalid MAC in Finished on pos -1'")
     print("  - 'invalid padding_length in Finished'")
+    print("  - 'fuzzed pre master secret' - this will end up with random")
+    print("    plaintexts in record with Finished, most resembling a randomly")
+    print("    selected PMS by the server")
     print("- different PKCS#1 v1.5 padding types, inconsistent results here")
     print("  may be caued by the same code used for decryption and signature")
     print("  verification:")
